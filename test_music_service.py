@@ -11,11 +11,26 @@ from qqmusic_api import Credential
 
 import music_service as music
 from app import Player, lyric_scroll_target, title_scroll_offset
-from gi.repository import GLib, Gst
+from gi.repository import Gdk, GLib, Gst, Gtk
 from lyrics_sync import Line
 
 
 class ServiceTest(unittest.TestCase):
+    def test_lyric_scroll_consumes_each_touchpad_delta(self):
+        adjustment = Gtk.Adjustment.new(10, 0, 500, 1, 10, 100)
+        player = SimpleNamespace(
+            lyric_lines=[1], lyric_scroll_motion=None, manual_scroll_timer=1,
+            lyric_box=SimpleNamespace(add_css_class=lambda *_: None),
+            lyric_scroll=SimpleNamespace(get_vadjustment=lambda: adjustment),
+        )
+        touchpad = SimpleNamespace(get_unit=lambda: Gdk.ScrollUnit.SURFACE)
+        self.assertTrue(Player.on_lyric_user_scroll(player, touchpad, 0, 24))
+        self.assertTrue(Player.on_lyric_user_scroll(player, touchpad, 0, 24))
+        self.assertEqual(adjustment.get_value(), 58)
+        wheel = SimpleNamespace(get_unit=lambda: Gdk.ScrollUnit.WHEEL)
+        self.assertTrue(Player.on_lyric_user_scroll(player, wheel, 0, 1))
+        self.assertEqual(adjustment.get_value(), 130)
+
     def test_lyric_manual_scroll_stays_active_between_gestures(self):
         classes = {"manual-scrolling"}
         player = SimpleNamespace(

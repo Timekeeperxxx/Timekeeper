@@ -428,9 +428,9 @@ class Player(Gtk.Application):
         scroll_controller = Gtk.EventControllerScroll.new(
             Gtk.EventControllerScrollFlags.VERTICAL | Gtk.EventControllerScrollFlags.HORIZONTAL
         )
-        scroll_controller.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        scroll_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         scroll_controller.connect("scroll", self.on_lyric_user_scroll)
-        self.lyric_box.add_controller(scroll_controller)
+        self.lyric_scroll.add_controller(scroll_controller)
         self.lyric_scroll.get_vadjustment().connect("value-changed", self.on_lyric_adjusted)
         self.show_lyric_message("播放歌曲后显示歌词")
 
@@ -536,14 +536,21 @@ class Player(Gtk.Application):
             else:
                 self.lyric_scroll_motion = None
 
-    def on_lyric_user_scroll(self, _controller, _dx, _dy):
-        if self.lyric_lines:
-            self.lyric_scroll_motion = None
-            self.lyric_box.add_css_class("manual-scrolling")
-            self.last_manual_scroll = GLib.get_monotonic_time()
-            if self.manual_scroll_timer is None:
-                self.manual_scroll_timer = GLib.timeout_add(80, self.finish_manual_scroll)
-        return False
+    def on_lyric_user_scroll(self, controller, _dx, dy):
+        if not self.lyric_lines:
+            return False
+        self.lyric_scroll_motion = None
+        self.lyric_box.add_css_class("manual-scrolling")
+        self.last_manual_scroll = GLib.get_monotonic_time()
+        if self.manual_scroll_timer is None:
+            self.manual_scroll_timer = GLib.timeout_add(80, self.finish_manual_scroll)
+        adjustment = self.lyric_scroll.get_vadjustment()
+        delta = dy if controller.get_unit() == Gdk.ScrollUnit.SURFACE else dy * 72
+        adjustment.set_value(max(0, min(
+            adjustment.get_value() + delta,
+            adjustment.get_upper() - adjustment.get_page_size(),
+        )))
+        return True
 
     def on_lyric_adjusted(self, _adjustment):
         if self.lyric_box.has_css_class("manual-scrolling"):
