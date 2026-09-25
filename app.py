@@ -83,6 +83,7 @@ class Player(Gtk.Application):
         self.lyric_padding = None
         self.lyric_realign_pending = False
         self.title_scroll_started = GLib.get_monotonic_time()
+        self.list_title_scrolls = []
         self.last_manual_scroll = 0
         self.manual_scroll_timer = None
         self.cover_target_size = 240
@@ -572,11 +573,25 @@ class Player(Gtk.Application):
     def animate_lyrics(self):
         title_adjustment = self.title_scroll.get_hadjustment()
         animations = Gtk.Settings.get_default().get_property("gtk-enable-animations")
+        now = GLib.get_monotonic_time()
         offset = title_scroll_offset(
-            (GLib.get_monotonic_time() - self.title_scroll_started) / 1_000_000,
+            (now - self.title_scroll_started) / 1_000_000,
             title_adjustment.get_upper() - title_adjustment.get_page_size(),
         ) if animations else 0
         title_adjustment.set_value(offset)
+        if self.pages.get_visible_child_name() == "library":
+            adjustment = self.song_scroll.get_vadjustment()
+            first = self.track_list.get_row_at_y(int(adjustment.get_value()))
+            last = self.track_list.get_row_at_y(int(adjustment.get_value() + adjustment.get_page_size()))
+            if first:
+                end = last.get_index() + 1 if last else len(self.list_title_scrolls)
+                for title_scroll, started in self.list_title_scrolls[first.get_index():end]:
+                    title_adjustment = title_scroll.get_hadjustment()
+                    offset = title_scroll_offset(
+                        (now - started) / 1_000_000,
+                        title_adjustment.get_upper() - title_adjustment.get_page_size(),
+                    ) if animations else 0
+                    title_adjustment.set_value(offset)
         if self.pages.get_visible_child_name() != "player":
             return True
         self.update_player_layout()
@@ -965,6 +980,7 @@ class Player(Gtk.Application):
 
     def clear_tracks(self):
         self.clear_box(self.track_list)
+        self.list_title_scrolls.clear()
         self.page_spinner.stop()
         self.page_spinner.set_visible(False)
 
@@ -989,11 +1005,18 @@ class Player(Gtk.Application):
             self.load_row_art(song, artwork)
             labels = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
             labels.set_hexpand(True)
+            title_scroll = Gtk.ScrolledWindow()
+            title_scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+            title_scroll.set_hexpand(True)
+            labels.append(title_scroll)
             name = Gtk.Label(label=song.title or song.name, xalign=0)
-            name.set_ellipsize(Pango.EllipsizeMode.END)
+            name.set_halign(Gtk.Align.START)
+            name.set_tooltip_text(song.title or song.name)
             name.add_css_class("song-title")
-            labels.append(name)
+            title_scroll.set_child(name)
+            self.list_title_scrolls.append((title_scroll, GLib.get_monotonic_time()))
             singer = Gtk.Label(label=artist(song), xalign=0)
+            singer.set_ellipsize(Pango.EllipsizeMode.END)
             singer.add_css_class("muted")
             labels.append(singer)
             line.append(labels)
