@@ -11,11 +11,24 @@ from qqmusic_api import Credential
 
 import music_service as music
 from app import Player, lyric_scroll_target, title_scroll_offset
-from gi.repository import Gst
+from gi.repository import GLib, Gst
 from lyrics_sync import Line
 
 
 class ServiceTest(unittest.TestCase):
+    def test_lyric_manual_scroll_stays_active_between_gestures(self):
+        classes = {"manual-scrolling"}
+        player = SimpleNamespace(
+            last_manual_scroll=1_000_000,
+            manual_scroll_timer=1,
+            lyric_box=SimpleNamespace(remove_css_class=classes.discard),
+        )
+        with patch.object(GLib, "get_monotonic_time", return_value=2_500_000):
+            self.assertTrue(Player.finish_manual_scroll(player))
+        with patch.object(GLib, "get_monotonic_time", return_value=3_100_000):
+            self.assertFalse(Player.finish_manual_scroll(player))
+        self.assertNotIn("manual-scrolling", classes)
+
     def test_title_scroll_waits_at_both_ends_and_returns_smoothly(self):
         self.assertEqual(title_scroll_offset(0.5, 84), 0)
         self.assertAlmostEqual(title_scroll_offset(2.2, 84), 42)

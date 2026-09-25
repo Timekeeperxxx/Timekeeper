@@ -428,9 +428,9 @@ class Player(Gtk.Application):
         scroll_controller = Gtk.EventControllerScroll.new(
             Gtk.EventControllerScrollFlags.VERTICAL | Gtk.EventControllerScrollFlags.HORIZONTAL
         )
-        scroll_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        scroll_controller.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
         scroll_controller.connect("scroll", self.on_lyric_user_scroll)
-        self.lyric_scroll.add_controller(scroll_controller)
+        self.lyric_box.add_controller(scroll_controller)
         self.lyric_scroll.get_vadjustment().connect("value-changed", self.on_lyric_adjusted)
         self.show_lyric_message("播放歌曲后显示歌词")
 
@@ -550,7 +550,7 @@ class Player(Gtk.Application):
             self.last_manual_scroll = GLib.get_monotonic_time()
 
     def finish_manual_scroll(self):
-        if GLib.get_monotonic_time() - self.last_manual_scroll < 400_000:
+        if GLib.get_monotonic_time() - self.last_manual_scroll < 2_000_000:
             return True
         self.lyric_box.remove_css_class("manual-scrolling")
         self.manual_scroll_timer = None
@@ -606,9 +606,10 @@ class Player(Gtk.Application):
             self.lyric_realign_pending = True
             self.lyric_scroll_motion = None
         ok, position = self.audio.query_position(Gst.Format.TIME)
+        realign = self.lyric_realign_pending and not self.lyric_box.has_css_class("manual-scrolling")
         self.sync_lyrics(
             int(position / 1_000_000) if ok else 0,
-            force=self.lyric_realign_pending, instant=self.lyric_realign_pending,
+            force=realign, instant=realign,
         )
         if self.lyric_scroll_motion:
             start, target, started = self.lyric_scroll_motion
