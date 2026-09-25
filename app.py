@@ -38,6 +38,20 @@ def lyric_scroll_target(row_y, row_height, viewport_height, max_scroll):
     return max(0, min(row_y + row_height / 2 - viewport_height * LYRIC_ANCHOR, max_scroll))
 
 
+def title_scroll_offset(elapsed, overflow):
+    if overflow <= 0:
+        return 0
+    travel = overflow / 42
+    phase = elapsed % (2 * travel + 2.4)
+    if phase < 1.2:
+        return 0
+    if phase < 1.2 + travel:
+        return (phase - 1.2) * 42
+    if phase < 2.4 + travel:
+        return overflow
+    return overflow - (phase - 2.4 - travel) * 42
+
+
 class Player(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="io.github.timekeeper.qqmusic")
@@ -68,6 +82,7 @@ class Player(Gtk.Application):
         self.lyric_geometry = None
         self.lyric_padding = None
         self.lyric_realign_pending = False
+        self.title_scroll_started = GLib.get_monotonic_time()
         self.last_manual_scroll = 0
         self.manual_scroll_timer = None
         self.cover_target_size = 240
@@ -246,7 +261,8 @@ class Player(Gtk.Application):
         controls.add_css_class("footer-controls")
         footer.append(controls)
         track = Gtk.Box(spacing=10)
-        track.set_size_request(210, -1)
+        track.set_size_request(280, -1)
+        track.set_hexpand(False)
         track.set_valign(Gtk.Align.CENTER)
         track.add_css_class("footer-track")
         controls.append(track)
@@ -267,12 +283,17 @@ class Player(Gtk.Application):
         track_copy.set_valign(Gtk.Align.CENTER)
         track_copy.set_hexpand(True)
         track.append(track_copy)
+        self.title_scroll = Gtk.ScrolledWindow()
+        self.title_scroll.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        self.title_scroll.set_hexpand(True)
+        track_copy.append(self.title_scroll)
         self.now_playing = Gtk.Label(label="尚未播放", xalign=0)
-        self.now_playing.set_ellipsize(Pango.EllipsizeMode.END)
+        self.now_playing.set_halign(Gtk.Align.START)
         self.now_playing.add_css_class("track-title")
-        track_copy.append(self.now_playing)
+        self.title_scroll.set_child(self.now_playing)
         self.now_artist = Gtk.Label(label="选择一首歌曲", xalign=0)
         self.now_artist.set_ellipsize(Pango.EllipsizeMode.END)
+        self.now_artist.set_max_width_chars(18)
         self.now_artist.add_css_class("muted")
         track_copy.append(self.now_artist)
 
@@ -549,6 +570,13 @@ class Player(Gtk.Application):
             self.sync_lyrics(position, force=True)
 
     def animate_lyrics(self):
+        title_adjustment = self.title_scroll.get_hadjustment()
+        animations = Gtk.Settings.get_default().get_property("gtk-enable-animations")
+        offset = title_scroll_offset(
+            (GLib.get_monotonic_time() - self.title_scroll_started) / 1_000_000,
+            title_adjustment.get_upper() - title_adjustment.get_page_size(),
+        ) if animations else 0
+        title_adjustment.set_value(offset)
         if self.pages.get_visible_child_name() != "player":
             return True
         self.update_player_layout()
@@ -774,7 +802,10 @@ class Player(Gtk.Application):
         self.clear_tracks()
         self.clear_box(self.playlist_box)
         self.now_playing.set_text("尚未播放")
+        self.now_playing.set_tooltip_text(None)
+        self.title_scroll_started = GLib.get_monotonic_time()
         self.now_artist.set_text("选择一首歌曲")
+        self.now_artist.set_tooltip_text(None)
         self.player_song_title.set_text("还没有播放歌曲")
         self.player_artist.set_text("从资料库选择一首歌")
         self.show_lyric_message("播放歌曲后显示歌词")
@@ -1026,7 +1057,11 @@ class Player(Gtk.Application):
         self.current_song = song
         self.pending_history_song = None
         self.now_playing.set_text(song.title or song.name)
+        self.now_playing.set_tooltip_text(song.title or song.name)
+        self.title_scroll.get_hadjustment().set_value(0)
+        self.title_scroll_started = GLib.get_monotonic_time()
         self.now_artist.set_text(artist(song))
+        self.now_artist.set_tooltip_text(artist(song))
         self.player_song_title.set_text(song.title or song.name)
         self.player_artist.set_text(artist(song))
         self.show_lyric_message("正在加载歌词…")

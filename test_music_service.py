@@ -10,12 +10,19 @@ from unittest.mock import patch
 from qqmusic_api import Credential
 
 import music_service as music
-from app import Player, lyric_scroll_target
+from app import Player, lyric_scroll_target, title_scroll_offset
 from gi.repository import Gst
 from lyrics_sync import Line
 
 
 class ServiceTest(unittest.TestCase):
+    def test_title_scroll_waits_at_both_ends_and_returns_smoothly(self):
+        self.assertEqual(title_scroll_offset(0.5, 84), 0)
+        self.assertAlmostEqual(title_scroll_offset(2.2, 84), 42)
+        self.assertEqual(title_scroll_offset(3.7, 84), 84)
+        self.assertAlmostEqual(title_scroll_offset(5.4, 84), 42)
+        self.assertEqual(title_scroll_offset(20, 0), 0)
+
     def test_active_lyric_anchors_above_center(self):
         self.assertEqual(lyric_scroll_target(250, 40, 400, 1000), 110)
         self.assertEqual(lyric_scroll_target(160, 40, 400, 1000), 20)
