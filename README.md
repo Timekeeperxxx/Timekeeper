@@ -14,6 +14,8 @@ python3 -m venv --system-site-packages .venv
 
 首次启动点击“扫码登录”。为保留旧版登录状态，账号凭证仍保存在 `$XDG_CONFIG_HOME/player/credential.json`（默认 `~/.config/player/credential.json`）；播放历史按账号保存在同一目录，最多 500 首不同歌曲，重播会移到最前。设置页可调整歌词字号和逐字高光颜色。播放链接临时获取，不下载或长期缓存歌曲。成功切换账号后，新凭证会覆盖旧凭证。
 
+排查歌词滚动时，可设置 `TIMEKEEPER_SCROLL_LOG=/tmp/timekeeper-scroll.log` 启动程序。日志只记录滚动事件、位置和窗口尺寸，不包含歌曲或账号信息；正常启动不会写此日志。
+
 ## 构建 deb
 
 在 Ubuntu 24.04 amd64 上安装 `python3.12-venv` 和 `dpkg-dev`，然后运行 `./build-deb.sh`。脚本会创建临时虚拟环境、安装 Python 依赖，并生成 `dist/timekeeper_0.1.0_amd64.deb`。GTK、GStreamer 等由系统包提供，不包含在 deb 内。安装时系统仍需下载这些依赖。

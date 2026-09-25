@@ -22,6 +22,7 @@ class ServiceTest(unittest.TestCase):
             lyric_lines=[1], lyric_scroll_motion=None, manual_scroll_timer=1,
             lyric_box=SimpleNamespace(add_css_class=lambda *_: None),
             lyric_scroll=SimpleNamespace(get_vadjustment=lambda: adjustment),
+            trace_scroll=lambda *_args, **_kwargs: None,
         )
         touchpad = SimpleNamespace(get_unit=lambda: Gdk.ScrollUnit.SURFACE)
         self.assertTrue(Player.on_lyric_user_scroll(player, touchpad, 0, 24))
@@ -37,6 +38,7 @@ class ServiceTest(unittest.TestCase):
             last_manual_scroll=1_000_000,
             manual_scroll_timer=1,
             lyric_box=SimpleNamespace(remove_css_class=classes.discard),
+            trace_scroll=lambda *_args, **_kwargs: None,
         )
         with patch.object(GLib, "get_monotonic_time", return_value=2_500_000):
             self.assertTrue(Player.finish_manual_scroll(player))

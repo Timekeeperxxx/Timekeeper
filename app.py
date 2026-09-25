@@ -1,6 +1,7 @@
 """A compact native Linux client for a QQ Music account."""
 
 import asyncio
+import os
 import random
 import threading
 import time
@@ -96,6 +97,12 @@ class Player(Gtk.Application):
         self.quality_downgrading = False
         self.pending_seek_ns = None
         self.lyric_size, self.lyric_color = music.load_lyric_settings()
+        log_path = os.environ.get("TIMEKEEPER_SCROLL_LOG")
+        self.scroll_log = open(log_path, "a", encoding="utf-8", buffering=1) if log_path else None
+
+    def trace_scroll(self, event, **details):
+        if self.scroll_log:
+            self.scroll_log.write(f"{time.monotonic():.3f} {event} {details}\n")
 
     def on_activate(self, _app):
         if self.get_active_window():
@@ -430,6 +437,8 @@ class Player(Gtk.Application):
         )
         scroll_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         scroll_controller.connect("scroll", self.on_lyric_user_scroll)
+        scroll_controller.connect("scroll-begin", lambda *_: self.trace_scroll("begin"))
+        scroll_controller.connect("scroll-end", lambda *_: self.trace_scroll("end"))
         self.lyric_scroll.add_controller(scroll_controller)
         self.lyric_scroll.get_vadjustment().connect("value-changed", self.on_lyric_adjusted)
         self.show_lyric_message("播放歌曲后显示歌词")
@@ -453,6 +462,7 @@ class Player(Gtk.Application):
         self.lyric_geometry = None
         self.lyric_padding = None
         self.lyric_realign_pending = True
+        self.trace_scroll("lyrics_loaded", count=len(self.lyric_lines))
         self.last_manual_scroll = 0
         self.lyric_box.remove_css_class("manual-scrolling")
         if not self.lyric_lines:
@@ -545,14 +555,21 @@ class Player(Gtk.Application):
         if self.manual_scroll_timer is None:
             self.manual_scroll_timer = GLib.timeout_add(80, self.finish_manual_scroll)
         adjustment = self.lyric_scroll.get_vadjustment()
-        delta = dy if controller.get_unit() == Gdk.ScrollUnit.SURFACE else dy * 72
+        maximum = max(0, adjustment.get_upper() - adjustment.get_page_size())
+        before = adjustment.get_value()
+        unit = controller.get_unit()
+        delta = dy if unit == Gdk.ScrollUnit.SURFACE else dy * 72
         adjustment.set_value(max(0, min(
-            adjustment.get_value() + delta,
-            adjustment.get_upper() - adjustment.get_page_size(),
+            before + delta, maximum,
         )))
+        self.trace_scroll("input", unit=unit.value_nick, dy=round(dy, 2),
+                          before=round(before, 1), after=round(adjustment.get_value(), 1),
+                          maximum=round(maximum, 1))
         return True
 
     def on_lyric_adjusted(self, _adjustment):
+        self.trace_scroll("position", value=round(_adjustment.get_value(), 1),
+                          maximum=round(max(0, _adjustment.get_upper() - _adjustment.get_page_size()), 1))
         if self.lyric_box.has_css_class("manual-scrolling"):
             self.last_manual_scroll = GLib.get_monotonic_time()
 
@@ -560,6 +577,7 @@ class Player(Gtk.Application):
         if GLib.get_monotonic_time() - self.last_manual_scroll < 2_000_000:
             return True
         self.lyric_box.remove_css_class("manual-scrolling")
+        self.trace_scroll("manual_end")
         self.manual_scroll_timer = None
         return False
 
@@ -612,8 +630,12 @@ class Player(Gtk.Application):
             self.lyric_geometry = geometry
             self.lyric_realign_pending = True
             self.lyric_scroll_motion = None
+            self.trace_scroll("geometry", width=geometry[0], page=round(geometry[1], 1),
+                              upper=round(geometry[2], 1))
         ok, position = self.audio.query_position(Gst.Format.TIME)
         realign = self.lyric_realign_pending and not self.lyric_box.has_css_class("manual-scrolling")
+        if realign:
+            self.trace_scroll("realign", value=round(adjustment.get_value(), 1))
         self.sync_lyrics(
             int(position / 1_000_000) if ok else 0,
             force=realign, instant=realign,
@@ -1290,6 +1312,8 @@ class Player(Gtk.Application):
     def on_close(self, *_):
         self.audio.set_state(Gst.State.NULL)
         self.cover_pool.shutdown(wait=False, cancel_futures=True)
+        if self.scroll_log:
+            self.scroll_log.close()
         return False
 
 
