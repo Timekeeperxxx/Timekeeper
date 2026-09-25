@@ -62,25 +62,26 @@ def parse(raw):
     return lines
 
 
-def highlight_color(progress, target="#ffffff"):
+def highlight_color(progress, target="#ffffff", inactive="#a8a8b2"):
     """Fade the sung word from the inactive color to the chosen highlight."""
     progress = max(0, min(1, progress))
     progress = progress * progress * (3 - 2 * progress)
     channels = (int(target[index:index + 2], 16) for index in (1, 3, 5))
+    starts = (int(inactive[index:index + 2], 16) for index in (1, 3, 5))
     return "#{:02x}{:02x}{:02x}".format(
-        *(round(start + (end - start) * progress) for start, end in zip((168, 168, 178), channels))
+        *(round(start + (end - start) * progress) for start, end in zip(starts, channels))
     )
 
 
-def highlight_markup(line, position_ms, current, target="#ffffff"):
+def highlight_markup(line, position_ms, current, target="#ffffff", inactive="#a8a8b2"):
     finished = [word for word in line.words if word.end <= position_ms]
     done_end = finished[-1].last if finished else 0
     word_start = current.first if current else done_end
     word_end = current.last if current else done_end
-    color = highlight_color((position_ms - current.start) / max(1, current.end - current.start), target) if current else "#a8a8b2"
+    color = highlight_color((position_ms - current.start) / max(1, current.end - current.start), target, inactive) if current else inactive
     return (
         f'<span foreground="{target}">{escape(line.text[:done_end])}</span>'
-        f'<span foreground="#a8a8b2">{escape(line.text[done_end:word_start])}</span>'
+        f'<span foreground="{inactive}">{escape(line.text[done_end:word_start])}</span>'
         f'<span foreground="{color}">{escape(line.text[word_start:word_end])}</span>'
-        f'<span foreground="#a8a8b2">{escape(line.text[word_end:])}</span>'
+        f'<span foreground="{inactive}">{escape(line.text[word_end:])}</span>'
     )

@@ -16,6 +16,7 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / 
 CREDENTIAL_FILE = CONFIG_DIR / "credential.json"
 QUALITY_FILE = CONFIG_DIR / "quality.txt"
 LYRIC_SETTINGS_FILE = CONFIG_DIR / "lyrics.json"
+APPEARANCE_FILE = CONFIG_DIR / "appearance.json"
 HISTORY_LIMIT = 500
 QUALITY = {
     "标准": SongFileType.MP3_128,
@@ -41,18 +42,37 @@ def load_lyric_settings():
     try:
         settings = json.loads(LYRIC_SETTINGS_FILE.read_text())
     except (OSError, json.JSONDecodeError):
-        return 31, "#ffffff"
+        return 31, "theme"
     size = settings.get("size", 31) if isinstance(settings, dict) else 31
-    color = settings.get("color", "#ffffff") if isinstance(settings, dict) else "#ffffff"
+    color = settings.get("color", "theme") if isinstance(settings, dict) else "theme"
     return (
         size if isinstance(size, int) and 20 <= size <= 48 else 31,
-        color if isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "#ffffff",
+        color if color == "theme" or isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "theme",
     )
 
 
 def save_lyric_settings(size, color):
     CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     LYRIC_SETTINGS_FILE.write_text(json.dumps({"size": size, "color": color}))
+
+
+def load_appearance():
+    try:
+        settings = json.loads(APPEARANCE_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return "dark", "#fa5268"
+    if not isinstance(settings, dict):
+        return "dark", "#fa5268"
+    mode, color = settings.get("mode"), settings.get("color")
+    return (
+        mode if mode in ("dark", "light") else "dark",
+        color if isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "#fa5268",
+    )
+
+
+def save_appearance(mode, color):
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    APPEARANCE_FILE.write_text(json.dumps({"mode": mode, "color": color}))
 
 
 def history_file(musicid):
@@ -88,9 +108,10 @@ def save_history(musicid, songs):
 
 
 def load_credential():
-    if not CREDENTIAL_FILE.exists():
+    try:
+        return Credential.model_validate_json(CREDENTIAL_FILE.read_text())
+    except (OSError, ValueError):
         return None
-    return Credential.model_validate_json(CREDENTIAL_FILE.read_text())
 
 
 def save_credential(credential):
@@ -129,6 +150,12 @@ async def _client():
         save_credential(credential)
         client = Client(credential=credential)
     return client, credential
+
+
+async def account_info():
+    client, credential = await _client()
+    async with client:
+        return credential, await client.user.get_vip_info()
 
 
 async def playlists():

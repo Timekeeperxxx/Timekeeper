@@ -10,6 +10,7 @@ class LyricParsingTest(unittest.TestCase):
         self.assertEqual(highlight_color(0.5), "#d4d4d8")
         self.assertEqual(highlight_color(-1), "#a8a8b2")
         self.assertEqual(highlight_color(1, "#ff6679"), "#ff6679")
+        self.assertEqual(highlight_color(0, "#ff6679", "#696971"), "#696971")
 
     def test_highlight_markup_preserves_word_positions(self):
         line = Line(0, 500, "你&好", [Word(0, 200, 0, 1), Word(200, 500, 1, 3)])

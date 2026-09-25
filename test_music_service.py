@@ -10,12 +10,45 @@ from unittest.mock import patch
 from qqmusic_api import Credential
 
 import music_service as music
-from app import Player, lyric_scroll_target, title_scroll_offset
+from app import Player, lyric_scroll_target, mask_account_id, title_scroll_offset
 from gi.repository import Gdk, GLib, Gst, Gtk
 from lyrics_sync import Line
 
 
 class ServiceTest(unittest.TestCase):
+    def test_account_id_shows_only_two_digits_at_each_end(self):
+        self.assertEqual(mask_account_id(1234567890), "12****90")
+        self.assertEqual(mask_account_id(1234), "****")
+
+    def test_global_shortcuts_skip_text_input(self):
+        calls = []
+        focus = [None]
+        controller = SimpleNamespace(get_widget=lambda: SimpleNamespace(get_focus=lambda: focus[0]))
+        player = SimpleNamespace(
+            toggle_pause=lambda *_: calls.append("pause"),
+            step=lambda amount: calls.append(amount),
+            pages=SimpleNamespace(set_visible_child_name=lambda page: calls.append(page)),
+            select_nav=lambda nav: calls.append(nav),
+            search_entry=SimpleNamespace(grab_focus=lambda: calls.append("focus"),
+                                         select_region=lambda start, end: calls.append((start, end))),
+        )
+        for key, expected in ((Gdk.KEY_space, "pause"), (Gdk.KEY_Page_Up, -1),
+                              (Gdk.KEY_Page_Down, 1)):
+            self.assertTrue(Player.on_shortcut(player, controller, key, 0, 0))
+            self.assertEqual(calls.pop(), expected)
+        self.assertTrue(Player.on_shortcut(player, controller, Gdk.KEY_k, 0, Gdk.ModifierType.CONTROL_MASK))
+        self.assertEqual(calls[-4:], ["library", None, "focus", (0, -1)])
+        calls.clear()
+
+        class Input:
+            pass
+
+        focus[0] = Input()
+        with patch.object(Gtk, "Editable", Input):
+            self.assertFalse(Player.on_shortcut(player, controller, Gdk.KEY_space, 0, 0))
+            self.assertFalse(Player.on_shortcut(player, controller, Gdk.KEY_k, 0, Gdk.ModifierType.CONTROL_MASK))
+        self.assertEqual(calls, [])
+
     def test_lyric_scroll_consumes_each_touchpad_delta(self):
         adjustment = Gtk.Adjustment.new(10, 0, 500, 1, 10, 100)
         player = SimpleNamespace(
@@ -99,9 +132,50 @@ class ServiceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory) / "player"
             with patch.object(music, "CONFIG_DIR", folder), patch.object(music, "LYRIC_SETTINGS_FILE", folder / "lyrics.json"):
-                self.assertEqual(music.load_lyric_settings(), (31, "#ffffff"))
+                self.assertEqual(music.load_lyric_settings(), (31, "theme"))
                 music.save_lyric_settings(37, "#ff6679")
                 self.assertEqual(music.load_lyric_settings(), (37, "#ff6679"))
+                music.save_lyric_settings(37, "theme")
+                self.assertEqual(music.load_lyric_settings(), (37, "theme"))
+
+    def test_appearance_persists_and_rejects_invalid_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "player"
+            with patch.object(music, "CONFIG_DIR", folder), patch.object(music, "APPEARANCE_FILE", folder / "appearance.json"):
+                self.assertEqual(music.load_appearance(), ("dark", "#fa5268"))
+                music.save_appearance("light", "#336699")
+                self.assertEqual(music.load_appearance(), ("light", "#336699"))
+                (folder / "appearance.json").write_text('{"mode":"other","color":"oops"}')
+                self.assertEqual(music.load_appearance(), ("dark", "#fa5268"))
+
+    def test_account_summary_distinguishes_validity_from_unavailable_api(self):
+        class Label:
+            def __init__(self):
+                self.text = ""
+
+            def set_text(self, text):
+                self.text = text
+
+        id_label, validity, membership, state = (Label() for _ in range(4))
+        button = SimpleNamespace(set_label=lambda *_: None)
+        logout = SimpleNamespace(set_sensitive=lambda *_: None)
+        callbacks = []
+        player = SimpleNamespace(
+            account_check=0, account_button=button, logout_button=logout,
+            account_state=state, account_id=id_label, account_validity=validity,
+            account_membership=membership,
+            work=lambda task, done, failed: callbacks.append((done, failed)),
+        )
+        credential = SimpleNamespace(musicid=123)
+        with patch.object(music, "load_credential", return_value=credential):
+            Player.refresh_account_info(player)
+        self.assertEqual(id_label.text, "****")
+        self.assertEqual(validity.text, "正在验证…")
+        callbacks[0][1]("network error")
+        self.assertEqual(validity.text, "暂时无法验证")
+        vip = SimpleNamespace(svip=1, identity=SimpleNamespace(huge_vip=0))
+        callbacks[0][0]((credential, vip))
+        self.assertEqual((validity.text, membership.text), ("凭证有效", "超级会员"))
 
     def test_song_list_prefetches_before_bottom_once(self):
         calls = []
@@ -171,6 +245,32 @@ class ServiceTest(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(credential_file.stat().st_mode), 0o600)
                 music.forget_credential()
                 self.assertFalse(credential_file.exists())
+
+    def test_corrupt_credential_allows_fresh_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "credential.json"
+            path.write_text("{broken")
+            with patch.object(music, "CREDENTIAL_FILE", path):
+                self.assertIsNone(music.load_credential())
+                self.assertEqual(path.read_text(), "{broken")
+
+    def test_play_button_retries_failed_stream(self):
+        calls = []
+        player = SimpleNamespace(current_song=object(), playback_failed=True, index=3,
+                                 play=lambda index: calls.append(index))
+        Player.toggle_pause(player, None)
+        self.assertEqual(calls, [3])
+
+    def test_audio_error_marks_stream_for_retry(self):
+        calls = []
+        player = SimpleNamespace(auto_quality=False, current_quality="标准", quality_downgrading=False,
+                                 audio=SimpleNamespace(set_state=lambda state: calls.append(state)),
+                                 set_playing=lambda value: calls.append(value),
+                                 set_status=lambda message: calls.append(message), playback_failed=False)
+        Player.on_audio_message(player, None, SimpleNamespace(type=Gst.MessageType.ERROR))
+        self.assertTrue(player.playback_failed)
+        self.assertIn(Gst.State.NULL, calls)
+        self.assertIn(False, calls)
 
     def test_stream_url_uses_selected_quality(self):
         requests = []

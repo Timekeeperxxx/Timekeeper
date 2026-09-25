@@ -19,6 +19,7 @@ gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Gst", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gst, Gtk, Pango
 
+from desktop_integration import DesktopIntegration
 import music_service as music
 from lyrics_sync import highlight_markup, parse as parse_lyrics
 
@@ -33,6 +34,23 @@ def artist(song):
 
 
 LYRIC_ANCHOR = 0.4
+
+PALETTES = {
+    "dark": {
+        "bg": "#151517", "sidebar": "#1d1d20", "topbar": "#19191c",
+        "card": "#202023", "hover": "#303035",
+        "border": "#35353b", "border_soft": "#252529", "fg": "#f5f5f7",
+        "secondary": "#c8c8cf", "muted": "#a1a1aa",
+        "player_start": "#34242d", "player_mid": "#1c1b20",
+    },
+    "light": {
+        "bg": "#f8f8fa", "sidebar": "#efeff2", "topbar": "#f5f5f7",
+        "card": "#ffffff", "hover": "#e6e6eb",
+        "border": "#d5d5dc", "border_soft": "#e5e5e9", "fg": "#1c1c1e",
+        "secondary": "#494951", "muted": "#686870",
+        "player_start": "#f4e9ee", "player_mid": "#f8f5f7",
+    },
+}
 
 
 def lyric_scroll_target(row_y, row_height, viewport_height, max_scroll):
@@ -51,6 +69,11 @@ def title_scroll_offset(elapsed, overflow):
     if phase < 2.4 + travel:
         return overflow
     return overflow - (phase - 2.4 - travel) * 42
+
+
+def mask_account_id(value):
+    digits = str(value)
+    return digits[:2] + "****" + digits[-2:] if len(digits) > 4 else "****"
 
 
 class Player(Gtk.Application):
@@ -96,7 +119,12 @@ class Player(Gtk.Application):
         self.buffering_since = None
         self.quality_downgrading = False
         self.pending_seek_ns = None
+        self.playback_failed = False
+        self.session_id = 0
+        self.account_check = 0
         self.lyric_size, self.lyric_color = music.load_lyric_settings()
+        self.appearance_mode, self.theme_color = music.load_appearance()
+        self.custom_lyric_color = self.lyric_color if self.lyric_color != "theme" else "#ffffff"
         log_path = os.environ.get("TIMEKEEPER_SCROLL_LOG")
         self.scroll_log = open(log_path, "a", encoding="utf-8", buffering=1) if log_path else None
 
@@ -117,11 +145,11 @@ class Player(Gtk.Application):
         bus.add_signal_watch()
         bus.connect("message", self.on_audio_message)
 
-        css = Gtk.CssProvider()
-        css.load_from_path(str(Path(__file__).with_name("style.css")))
+        self.css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
+        self.apply_appearance()
         self.lyric_css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), self.lyric_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
@@ -131,6 +159,15 @@ class Player(Gtk.Application):
         self.window = Gtk.ApplicationWindow(application=self, title="Timekeeper · QQ 音乐")
         self.window.set_default_size(1120, 740)
         self.window.connect("close-request", self.on_close)
+        self.install_shortcuts(self.window)
+        header = Gtk.HeaderBar()
+        header.add_css_class("app-headerbar")
+        header.set_title_widget(Gtk.Box())
+        header.set_show_title_buttons(True)
+        header_brand = Gtk.Label(label="Timekeeper")
+        header_brand.add_css_class("header-brand")
+        header.pack_start(header_brand)
+        self.window.set_titlebar(header)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.window.set_child(root)
 
@@ -197,6 +234,7 @@ class Player(Gtk.Application):
         self.title.add_css_class("page-title")
         content.append(self.title)
         self.search_entry = Gtk.SearchEntry(placeholder_text="搜索歌曲")
+        self.search_entry.set_tooltip_text("搜索歌曲 · Ctrl+K")
         self.search_entry.set_size_request(250, -1)
         self.search_entry.set_valign(Gtk.Align.CENTER)
         self.search_entry.connect("activate", self.on_search)
@@ -265,12 +303,39 @@ class Player(Gtk.Application):
         footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         footer.add_css_class("footer")
         root.append(footer)
+        progress_area = Gtk.Overlay()
+        progress_area.add_css_class("progress-area")
+        footer.append(progress_area)
+        self.progress = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
+        self.progress.add_css_class("footer-progress")
+        self.progress.set_hexpand(True)
+        self.progress.set_draw_value(False)
+        self.progress.connect("change-value", self.seek)
+        progress_area.set_child(self.progress)
+        progress_times = Gtk.Box()
+        progress_times.add_css_class("progress-times")
+        progress_times.set_can_target(False)
+        progress_times.set_visible(False)
+        progress_area.add_overlay(progress_times)
+        self.elapsed_label = Gtk.Label(label="0:00")
+        self.elapsed_label.add_css_class("time-label")
+        progress_times.append(self.elapsed_label)
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        progress_times.append(spacer)
+        self.duration_label = Gtk.Label(label="0:00")
+        self.duration_label.add_css_class("time-label")
+        progress_times.append(self.duration_label)
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", lambda *_: (progress_area.add_css_class("hovered"), progress_times.set_visible(True)))
+        motion.connect("leave", lambda *_: (progress_area.remove_css_class("hovered"), progress_times.set_visible(False)))
+        progress_area.add_controller(motion)
         controls = Gtk.Box(spacing=24)
         controls.add_css_class("footer-controls")
         footer.append(controls)
         track = Gtk.Box(spacing=10)
         track.set_size_request(280, -1)
-        track.set_hexpand(False)
+        track.set_hexpand(True)
         track.set_valign(Gtk.Align.CENTER)
         track.add_css_class("footer-track")
         controls.append(track)
@@ -309,34 +374,19 @@ class Player(Gtk.Application):
         player_buttons.set_valign(Gtk.Align.CENTER)
         player_buttons.add_css_class("footer-transport")
         controls.append(player_buttons)
-        previous = self.icon_button("media-skip-backward-symbolic", "上一首")
+        previous = self.icon_button("media-skip-backward-symbolic", "上一首 · PageUp")
         previous.connect("clicked", lambda *_: self.step(-1))
         player_buttons.append(previous)
-        self.pause_button = self.icon_button("media-playback-start-symbolic", "播放")
+        self.pause_button = self.icon_button("media-playback-start-symbolic", "播放 · 空格")
         self.pause_button.add_css_class("play-button")
         self.pause_button.connect("clicked", self.toggle_pause)
         player_buttons.append(self.pause_button)
-        next_button = self.icon_button("media-skip-forward-symbolic", "下一首")
+        next_button = self.icon_button("media-skip-forward-symbolic", "下一首 · PageDown")
         next_button.connect("clicked", lambda *_: self.step(1))
         player_buttons.append(next_button)
-        progress_row = Gtk.Box(spacing=7)
-        progress_row.set_hexpand(True)
-        progress_row.set_valign(Gtk.Align.CENTER)
-        progress_row.set_size_request(220, -1)
-        progress_row.add_css_class("footer-progress")
-        controls.append(progress_row)
-        self.elapsed_label = Gtk.Label(label="0:00")
-        self.elapsed_label.add_css_class("time-label")
-        progress_row.append(self.elapsed_label)
-        self.progress = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 1)
-        self.progress.set_hexpand(True)
-        self.progress.set_draw_value(False)
-        self.progress.connect("change-value", self.seek)
-        progress_row.append(self.progress)
-        self.duration_label = Gtk.Label(label="0:00")
-        self.duration_label.add_css_class("time-label")
-        progress_row.append(self.duration_label)
         tools = Gtk.Box(spacing=9)
+        tools.set_hexpand(True)
+        tools.set_halign(Gtk.Align.END)
         tools.set_valign(Gtk.Align.CENTER)
         tools.add_css_class("footer-tools")
         controls.append(tools)
@@ -344,10 +394,13 @@ class Player(Gtk.Application):
         volume_icon.add_css_class("muted")
         tools.append(volume_icon)
         volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 1, 0.05)
-        volume.set_size_request(80, -1)
+        volume.add_css_class("volume-scale")
+        volume.set_size_request(160, -1)
         volume.set_valign(Gtk.Align.CENTER)
         volume.set_draw_value(False)
         volume.set_value(0.8)
+        self.volume = volume
+        self.audio.set_property("volume", volume.get_value())
         volume.set_tooltip_text("音量")
         volume.connect("value-changed", lambda scale: self.audio.set_property("volume", scale.get_value()))
         tools.append(volume)
@@ -367,6 +420,7 @@ class Player(Gtk.Application):
         option_list.append(self.repeat)
         options.connect("clicked", lambda *_: popover.popup())
 
+        self.desktop = DesktopIntegration(self)
         GLib.timeout_add(100, self.update_progress)
         GLib.timeout_add(16, self.animate_lyrics)
         self.window.present()
@@ -374,10 +428,10 @@ class Player(Gtk.Application):
         if credential:
             self.history_musicid = credential.musicid
             self.history = music.load_history(credential.musicid)
-            self.account_button.set_label("切换账号")
-            self.account_state.set_text("已保存 QQ 音乐登录状态")
+            self.refresh_account_info()
             self.load_library()
         else:
+            self.show_account_signed_out()
             self.set_status("扫码登录后即可读取你的 QQ 音乐资料库")
 
     def build_player_page(self):
@@ -477,7 +531,6 @@ class Player(Gtk.Application):
             row.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
             row.add_css_class("lyric-line")
             row.set_cursor_from_name("pointer")
-            row.set_tooltip_text("点击从这里播放")
             click = Gtk.GestureClick.new()
             click.set_button(1)
             click.connect("released", self.on_lyric_clicked, index)
@@ -510,7 +563,10 @@ class Player(Gtk.Application):
             self.lyric_state = state
             if line.words:
                 current = line.words[word_index] if word_active else None
-                self.lyric_rows[line_index].set_markup(highlight_markup(line, position_ms, current, self.lyric_color))
+                self.lyric_rows[line_index].set_markup(highlight_markup(
+                    line, position_ms, current, self.effective_lyric_color(),
+                    "#696971" if self.appearance_mode == "light" else "#a8a8b2",
+                ))
         if (old_line != line_index or force) and (force or not self.lyric_box.has_css_class("manual-scrolling")):
             adjustment = self.lyric_scroll.get_vadjustment()
             viewport = adjustment.get_page_size()
@@ -718,6 +774,23 @@ class Player(Gtk.Application):
             ("播放音质", "自动优先高品质，持续缓冲时切换为标准音质；下一首起生效", self.quality),
         ])
 
+        mode_control = Gtk.DropDown.new_from_strings(["深色", "浅色"])
+        mode_control.set_selected(0 if self.appearance_mode == "dark" else 1)
+        mode_control.connect("notify::selected", self.on_appearance_changed)
+        self.mode_control = mode_control
+        theme_dialog = Gtk.ColorDialog()
+        theme_dialog.set_title("选择主题色")
+        theme_control = Gtk.ColorDialogButton.new(theme_dialog)
+        rgba = Gdk.RGBA()
+        rgba.parse(self.theme_color)
+        theme_control.set_rgba(rgba)
+        theme_control.connect("notify::rgba", self.on_appearance_changed)
+        self.theme_color_control = theme_control
+        add_section("外观", [
+            ("显示模式", "切换界面的浅色或深色外观", mode_control),
+            ("主题色", "用于按钮、选中状态和强调元素", theme_control),
+        ])
+
         size_control = Gtk.SpinButton.new_with_range(20, 48, 1)
         size_control.set_value(self.lyric_size)
         size_control.connect("value-changed", self.on_lyric_settings_changed)
@@ -726,38 +799,103 @@ class Player(Gtk.Application):
         color_dialog.set_title("选择逐字高光颜色")
         color_control = Gtk.ColorDialogButton.new(color_dialog)
         rgba = Gdk.RGBA()
-        rgba.parse(self.lyric_color)
+        rgba.parse(self.custom_lyric_color)
         color_control.set_rgba(rgba)
         color_control.connect("notify::rgba", self.on_lyric_settings_changed)
         self.lyric_color_control = color_control
+        follow_control = Gtk.Switch()
+        follow_control.set_active(self.lyric_color == "theme")
+        follow_control.connect("notify::active", self.on_lyric_settings_changed)
+        self.follow_theme_control = follow_control
+        color_control.set_sensitive(self.lyric_color != "theme")
         add_section("歌词", [
             ("字体大小", "调整播放页的歌词字号", size_control),
+            ("跟随主题色", "当前歌词和逐字高光使用主题色", follow_control),
             ("逐字高光颜色", "用于逐字高光和当前播放的歌词", color_control),
         ])
 
         self.account_state = Gtk.Label(label="尚未登录", xalign=0)
+        self.account_id = Gtk.Label(label="—", xalign=1)
+        self.account_validity = Gtk.Label(label="尚未登录", xalign=1)
+        self.account_membership = Gtk.Label(label="—", xalign=1)
+        for value in (self.account_id, self.account_validity, self.account_membership):
+            value.add_css_class("account-value")
         self.account_button = Gtk.Button(label="扫码登录")
         self.account_button.add_css_class("primary-button")
         self.account_button.connect("clicked", self.toggle_login)
+        self.logout_button = Gtk.Button(label="注销登录")
+        self.logout_button.add_css_class("logout-button")
+        self.logout_button.connect("clicked", self.logout)
+        actions = Gtk.Box(spacing=10)
+        actions.append(self.logout_button)
+        actions.append(self.account_button)
         add_section("账号", [
-            ("QQ 音乐", self.account_state, self.account_button),
+            ("QQ 音乐", self.account_state, actions),
+            ("账号 ID", "当前保存的 QQ 音乐账号", self.account_id),
+            ("登录状态", "以账号接口验证当前登录凭证", self.account_validity),
+            ("会员权益", "以 QQ 音乐接口返回的权益为准", self.account_membership),
         ])
+        notice = Gtk.Label(label=(
+            "本软件仅使用播放所需的 QQ 音乐账号数据。扫码登录不会要求或读取 QQ 密码；"
+            "登录凭证保存在本机，请勿分享。注销登录会删除本机凭证，播放历史仍保存在本机。"
+        ), xalign=0)
+        notice.add_css_class("account-notice")
+        notice.set_wrap(True)
+        content.append(notice)
+
+    def apply_appearance(self):
+        palette = PALETTES[self.appearance_mode].copy()
+        palette["accent"] = self.theme_color
+        palette["accent_hover"] = self.theme_color
+        rgb = [int(self.theme_color[index:index + 2], 16) for index in (1, 3, 5)]
+        palette["accent_surface"] = f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.14)"
+        palette["selected"] = f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, 0.12)"
+        channels = [channel / 255 for channel in rgb]
+        luminance = sum(weight * (value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4)
+                        for weight, value in zip((0.2126, 0.7152, 0.0722), channels))
+        palette["accent_fg"] = "#17171a" if luminance > 0.179 else "#ffffff"
+        definitions = "\n".join(f"@define-color {name} {value};" for name, value in palette.items())
+        self.css.load_from_data((definitions + "\n" + Path(__file__).with_name("style.css").read_text()).encode())
+        Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", self.appearance_mode == "dark")
+
+    def on_appearance_changed(self, *_):
+        self.appearance_mode = "dark" if self.mode_control.get_selected() == 0 else "light"
+        rgba = self.theme_color_control.get_rgba()
+        self.theme_color = "#{:02x}{:02x}{:02x}".format(
+            *(round(channel * 255) for channel in (rgba.red, rgba.green, rgba.blue))
+        )
+        music.save_appearance(self.appearance_mode, self.theme_color)
+        self.apply_appearance()
+        self.apply_lyric_style()
+        self.refresh_active_lyric()
+
+    def effective_lyric_color(self):
+        return self.theme_color if self.lyric_color == "theme" else self.lyric_color
+
+    def refresh_active_lyric(self):
+        if self.lyric_rows and self.audio:
+            ok, position = self.audio.query_position(Gst.Format.TIME)
+            if ok:
+                self.sync_lyrics(int(position / 1_000_000))
 
     def apply_lyric_style(self):
         self.lyric_css.load_from_data(
             f".lyric-line {{ font-size: {self.lyric_size}px; }} "
-            f".lyric-line.active {{ color: {self.lyric_color}; }} "
+            f".lyric-line.active {{ color: {self.effective_lyric_color()}; }} "
             f".lyric-message {{ font-size: {round(self.lyric_size * 0.8)}px; }}".encode()
         )
 
     def on_lyric_settings_changed(self, *_):
         self.lyric_size = self.lyric_size_control.get_value_as_int()
         rgba = self.lyric_color_control.get_rgba()
-        self.lyric_color = "#{:02x}{:02x}{:02x}".format(
+        self.custom_lyric_color = "#{:02x}{:02x}{:02x}".format(
             *(round(channel * 255) for channel in (rgba.red, rgba.green, rgba.blue))
         )
+        self.lyric_color = "theme" if self.follow_theme_control.get_active() else self.custom_lyric_color
+        self.lyric_color_control.set_sensitive(self.lyric_color != "theme")
         self.apply_lyric_style()
         music.save_lyric_settings(self.lyric_size, self.lyric_color)
+        self.refresh_active_lyric()
         if self.current_song and self.pages.get_visible_child_name() == "player":
             self.lyric_realign_pending = True
 
@@ -781,11 +919,46 @@ class Player(Gtk.Application):
         button.add_css_class("icon-button")
         return button
 
-    def set_playing(self, playing):
+    def set_playing(self, playing, stopped=False):
         self.pause_button.set_icon_name(
             "media-playback-pause-symbolic" if playing else "media-playback-start-symbolic"
         )
-        self.pause_button.set_tooltip_text("暂停" if playing else "播放")
+        self.pause_button.set_tooltip_text("暂停 · 空格" if playing else "播放 · 空格")
+        if hasattr(self, "desktop"):
+            self.desktop.playback_changed(playing, stopped or self.current_song is None)
+
+    def install_shortcuts(self, window):
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_shortcut)
+        window.add_controller(keys)
+
+    def on_shortcut(self, controller, key, _code, state):
+        focus = controller.get_widget().get_focus()
+        while focus:
+            if isinstance(focus, (Gtk.Editable, Gtk.TextView)):
+                return False
+            focus = focus.get_parent()
+        modifiers = state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK |
+                             Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.SUPER_MASK |
+                             Gdk.ModifierType.META_MASK)
+        if modifiers == Gdk.ModifierType.CONTROL_MASK and key in (Gdk.KEY_k, Gdk.KEY_K):
+            self.pages.set_visible_child_name("library")
+            self.select_nav(None)
+            self.search_entry.grab_focus()
+            self.search_entry.select_region(0, -1)
+            return True
+        if modifiers:
+            return False
+        if key == Gdk.KEY_space:
+            self.toggle_pause(None)
+        elif key == Gdk.KEY_Page_Up:
+            self.step(-1)
+        elif key == Gdk.KEY_Page_Down:
+            self.step(1)
+        else:
+            return False
+        return True
 
     def set_status(self, text):
         self.status.set_text(text)
@@ -793,12 +966,12 @@ class Player(Gtk.Application):
         self.player_status.set_text(text)
         self.player_status.set_visible(bool(text))
 
-    def work(self, task, done=None):
+    def work(self, task, done=None, on_error=None):
         def run():
             try:
                 value = asyncio.run(task())
             except Exception as exc:
-                GLib.idle_add(self.set_status, str(exc))
+                GLib.idle_add(on_error or self.set_status, str(exc))
             else:
                 if done:
                     GLib.idle_add(done, value)
@@ -807,7 +980,8 @@ class Player(Gtk.Application):
 
     def toggle_login(self, _button):
         self.login_window = Gtk.Window(title="QQ 音乐登录", transient_for=self.window, modal=True)
-        self.login_window.set_default_size(320, 390)
+        self.install_shortcuts(self.login_window)
+        self.login_window.set_default_size(320, 430)
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         content.set_margin_top(24)
         content.set_margin_bottom(24)
@@ -818,29 +992,59 @@ class Player(Gtk.Application):
         self.qr_picture = Gtk.Picture()
         self.qr_picture.set_size_request(260, 260)
         content.append(self.qr_picture)
-        content.append(Gtk.Label(label="二维码将在 3 分钟后过期"))
+        self.login_hint = Gtk.Label(label="二维码将在 3 分钟后过期")
+        content.append(self.login_hint)
+        retry = Gtk.Button(label="重新获取二维码")
+        retry.set_sensitive(False)
+        content.append(retry)
         self.login_window.present()
-        self.set_status("正在获取登录二维码…")
 
         def qr_ready(data):
             GLib.idle_add(self.set_qr, data)
 
-        self.work(lambda: music.login(qr_ready), self.logged_in)
+        def login_error(message):
+            if self.login_window.get_visible():
+                self.login_hint.set_text(f"登录失败：{message}")
+                retry.set_sensitive(True)
+            self.set_status(f"登录失败：{message}")
+
+        def start_login(*_):
+            retry.set_sensitive(False)
+            self.qr_picture.set_paintable(None)
+            self.login_hint.set_text("正在获取二维码…")
+            self.set_status("正在获取登录二维码…")
+            self.work(lambda: music.login(qr_ready), self.logged_in, login_error)
+
+        retry.connect("clicked", start_login)
+        start_login()
 
     def set_qr(self, data):
         if self.login_window.get_visible():
             self.qr_picture.set_paintable(Gdk.Texture.new_from_bytes(GLib.Bytes.new(data)))
+            self.login_hint.set_text("请在 3 分钟内扫码并确认")
             self.set_status("请使用手机 QQ 扫码并确认")
 
     def logged_in(self, credential):
         self.login_window.close()
+        self.clear_session()
+        self.history_musicid = credential.musicid
+        self.history = music.load_history(credential.musicid)
+        self.refresh_account_info()
+        self.set_status("登录成功")
+        self.load_library()
+
+    def clear_session(self):
+        self.session_id += 1
+        self.account_check += 1
         self.audio.set_state(Gst.State.NULL)
         self.play_request_id += 1
         self.request_id += 1
         self.current_song = None
         self.pending_history_song = None
-        self.history_musicid = credential.musicid
-        self.history = music.load_history(credential.musicid)
+        self.playback_failed = False
+        self.history_musicid = None
+        self.history = []
+        self.playlists = []
         self.queue = []
         self.index = -1
         self.songs.clear()
@@ -862,13 +1066,70 @@ class Player(Gtk.Application):
         self.cover.set_paintable(None)
         self.hero_cover.set_paintable(None)
         self.set_playing(False)
+        self.desktop.clear()
+
+    def show_account_signed_out(self):
+        self.account_button.set_label("扫码登录")
+        self.logout_button.set_sensitive(False)
+        self.account_state.set_text("尚未登录")
+        self.account_id.set_text("—")
+        self.account_validity.set_text("尚未登录")
+        self.account_membership.set_text("—")
+
+    def refresh_account_info(self):
+        credential = music.load_credential()
+        if credential is None:
+            self.show_account_signed_out()
+            return
+        self.account_check += 1
+        check = self.account_check
         self.account_button.set_label("切换账号")
-        self.account_state.set_text("已保存 QQ 音乐登录状态")
-        self.set_status("登录成功")
-        self.load_library()
+        self.logout_button.set_sensitive(True)
+        self.account_state.set_text("已保存扫码登录凭证")
+        self.account_id.set_text(mask_account_id(credential.musicid))
+        self.account_validity.set_text("正在验证…")
+        self.account_membership.set_text("正在查询…")
+
+        def done(result):
+            refreshed, vip = result
+            if check != self.account_check:
+                return
+            self.account_id.set_text(mask_account_id(refreshed.musicid))
+            self.account_validity.set_text("凭证有效")
+            identity = vip.identity
+            if vip.svip:
+                membership = "超级会员"
+            elif identity.huge_vip:
+                membership = "豪华绿钻"
+            elif identity.vip:
+                membership = "绿钻会员"
+            elif any((identity.child_vip, identity.exp_vip, identity.group_vip_flag,
+                      identity.cp_lover_flag, identity.ad_vip_flag, identity.twelve,
+                      identity.eight, vip.star)):
+                membership = "其他会员权益"
+            else:
+                membership = "未查询到会员权益"
+            self.account_membership.set_text(membership)
+
+        def failed(_message):
+            if check == self.account_check:
+                self.account_validity.set_text("暂时无法验证")
+                self.account_membership.set_text("暂时无法获取")
+
+        self.work(music.account_info, done, failed)
+
+    def logout(self, *_):
+        music.forget_credential()
+        self.clear_session()
+        self.show_account_signed_out()
+        self.info.set_text("扫码登录后即可读取你的 QQ 音乐资料库")
+        self.pages.set_visible_child_name("settings")
+        self.select_nav(self.settings_button)
+        self.set_status("已注销登录")
 
     def load_library(self):
-        self.work(music.playlists, self.set_playlists)
+        session = self.session_id
+        self.work(music.playlists, lambda playlists: self.set_playlists(playlists) if session == self.session_id else None)
         self.show_liked()
 
     def set_playlists(self, playlists):
@@ -930,6 +1191,7 @@ class Player(Gtk.Application):
     def show_settings(self, *_):
         self.pages.set_visible_child_name("settings")
         self.select_nav(self.settings_button)
+        self.refresh_account_info()
 
     def on_search(self, entry):
         self.pages.set_visible_child_name("library")
@@ -1108,6 +1370,7 @@ class Player(Gtk.Application):
         self.index = index
         song = self.queue[index]
         self.current_song = song
+        self.desktop.song_changed(song)
         self.pending_history_song = None
         self.now_playing.set_text(song.title or song.name)
         self.now_playing.set_tooltip_text(song.title or song.name)
@@ -1145,6 +1408,7 @@ class Player(Gtk.Application):
         self.buffering_since = None
         self.quality_downgrading = False
         self.pending_seek_ns = None
+        self.playback_failed = False
 
         def start(result):
             if request_id != self.play_request_id:
@@ -1155,6 +1419,7 @@ class Player(Gtk.Application):
             self.audio.set_property("uri", url)
             self.audio.set_state(Gst.State.PLAYING)
             self.set_playing(True)
+            self.playback_failed = False
             self.set_status("")
             self.pending_history_song = song
 
@@ -1163,7 +1428,15 @@ class Player(Gtk.Application):
                 return await music.auto_stream_url(song)
             return await music.stream_url(song, quality), quality
 
-        self.work(resolve, start)
+        def failed(message):
+            if request_id != self.play_request_id:
+                return
+            self.audio.set_state(Gst.State.NULL)
+            self.set_playing(False)
+            self.playback_failed = True
+            self.set_status(f"播放失败：{message}。点击播放重试")
+
+        self.work(resolve, start, failed)
 
     def record_history(self, song):
         if self.history_musicid is None:
@@ -1186,6 +1459,9 @@ class Player(Gtk.Application):
     def toggle_pause(self, _button):
         if self.current_song is None:
             self.step(1)
+            return
+        if self.playback_failed:
+            self.play(self.index)
             return
         _ret, state, _pending = self.audio.get_state(0)
         if state == Gst.State.PLAYING:
@@ -1219,7 +1495,8 @@ class Player(Gtk.Application):
                 return
             self.audio.set_state(Gst.State.NULL)
             self.set_playing(False)
-            self.set_status("播放失败，请尝试其他音质或歌曲")
+            self.playback_failed = True
+            self.set_status("播放失败，点击播放重试；也可在设置中切换音质")
 
     def load_cover(self, song, request_id):
         self.cover_source = None
@@ -1291,7 +1568,9 @@ class Player(Gtk.Application):
             if request_id != self.play_request_id:
                 return
             if isinstance(result, Exception):
-                self.set_status(f"自动切换音质失败：{result}")
+                self.playback_failed = True
+                self.set_playing(False)
+                self.set_status(f"自动切换音质失败：{result}。点击播放重试")
                 return
             self.current_quality = "标准"
             self.set_status("")
@@ -1300,6 +1579,7 @@ class Player(Gtk.Application):
             self.pending_seek_ns = position if ok and position > 0 else None
             self.audio.set_state(Gst.State.PAUSED if self.pending_seek_ns is not None else Gst.State.PLAYING)
             self.set_playing(True)
+            self.playback_failed = False
 
         self.work(resolve, restart)
 
@@ -1310,11 +1590,18 @@ class Player(Gtk.Application):
         return False
 
     def on_close(self, *_):
+        if not self.desktop.tray_registered:
+            self.quit_player()
+            return False
+        self.window.hide()
+        return True
+
+    def quit_player(self, *_):
         self.audio.set_state(Gst.State.NULL)
         self.cover_pool.shutdown(wait=False, cancel_futures=True)
         if self.scroll_log:
             self.scroll_log.close()
-        return False
+        self.quit()
 
 
 if __name__ == "__main__":
