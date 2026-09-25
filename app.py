@@ -571,47 +571,50 @@ class Player(Gtk.Application):
         heading = Gtk.Label(label="设置", xalign=0)
         heading.add_css_class("page-title")
         page.append(heading)
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        card.add_css_class("settings-card")
-        card.set_halign(Gtk.Align.START)
-        card.set_size_request(460, -1)
-        page.append(card)
-        section = Gtk.Label(label="QQ 音乐账号", xalign=0)
-        section.add_css_class("settings-heading")
-        card.append(section)
-        self.account_state = Gtk.Label(label="尚未登录", xalign=0)
-        self.account_state.add_css_class("muted")
-        card.append(self.account_state)
-        self.account_button = Gtk.Button(label="扫码登录")
-        self.account_button.add_css_class("primary-button")
-        self.account_button.set_halign(Gtk.Align.START)
-        self.account_button.connect("clicked", self.toggle_login)
-        card.append(self.account_button)
-        quality_heading = Gtk.Label(label="播放音质", xalign=0)
-        quality_heading.add_css_class("settings-heading")
-        quality_heading.set_margin_top(18)
-        card.append(quality_heading)
-        self.quality.set_halign(Gtk.Align.START)
-        card.append(self.quality)
-        quality_hint = Gtk.Label(label="自动优先高品质，持续缓冲时切换为标准音质；下一首起生效", xalign=0)
-        quality_hint.add_css_class("muted")
-        quality_hint.set_wrap(True)
-        card.append(quality_hint)
-        lyric_heading = Gtk.Label(label="播放页歌词", xalign=0)
-        lyric_heading.add_css_class("settings-heading")
-        lyric_heading.set_margin_top(18)
-        card.append(lyric_heading)
-        size_row = Gtk.Box(spacing=16)
-        card.append(size_row)
-        size_row.append(Gtk.Label(label="字体大小", xalign=0))
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        page.append(scroll)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content.set_hexpand(True)
+        content.add_css_class("settings-content")
+        scroll.set_child(content)
+
+        def add_section(title, rows):
+            label = Gtk.Label(label=title, xalign=0)
+            label.add_css_class("settings-heading")
+            content.append(label)
+            group = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            group.add_css_class("settings-group")
+            content.append(group)
+            for name, description, control in rows:
+                if group.get_first_child():
+                    group.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+                row = Gtk.Box(spacing=24)
+                row.add_css_class("settings-row")
+                group.append(row)
+                copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                copy.set_hexpand(True)
+                row.append(copy)
+                title_label = Gtk.Label(label=name, xalign=0)
+                title_label.add_css_class("settings-label")
+                copy.append(title_label)
+                hint = description if isinstance(description, Gtk.Widget) else Gtk.Label(label=description, xalign=0)
+                hint.add_css_class("muted")
+                hint.set_wrap(True)
+                copy.append(hint)
+                control.set_valign(Gtk.Align.CENTER)
+                row.append(control)
+
+        self.quality.set_halign(Gtk.Align.END)
+        add_section("播放", [
+            ("播放音质", "自动优先高品质，持续缓冲时切换为标准音质；下一首起生效", self.quality),
+        ])
+
         size_control = Gtk.SpinButton.new_with_range(20, 48, 1)
         size_control.set_value(self.lyric_size)
         size_control.connect("value-changed", self.on_lyric_settings_changed)
-        size_row.append(size_control)
         self.lyric_size_control = size_control
-        color_row = Gtk.Box(spacing=16)
-        card.append(color_row)
-        color_row.append(Gtk.Label(label="逐字高光颜色", xalign=0))
         color_dialog = Gtk.ColorDialog()
         color_dialog.set_title("选择逐字高光颜色")
         color_control = Gtk.ColorDialogButton.new(color_dialog)
@@ -619,8 +622,19 @@ class Player(Gtk.Application):
         rgba.parse(self.lyric_color)
         color_control.set_rgba(rgba)
         color_control.connect("notify::rgba", self.on_lyric_settings_changed)
-        color_row.append(color_control)
         self.lyric_color_control = color_control
+        add_section("歌词", [
+            ("字体大小", "调整播放页的歌词字号", size_control),
+            ("逐字高光颜色", "用于逐字高光和当前播放的歌词", color_control),
+        ])
+
+        self.account_state = Gtk.Label(label="尚未登录", xalign=0)
+        self.account_button = Gtk.Button(label="扫码登录")
+        self.account_button.add_css_class("primary-button")
+        self.account_button.connect("clicked", self.toggle_login)
+        add_section("账号", [
+            ("QQ 音乐", self.account_state, self.account_button),
+        ])
 
     def apply_lyric_style(self):
         self.lyric_css.load_from_data(

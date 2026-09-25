@@ -126,14 +126,18 @@ button:focus-visible, entry:focus-visible, scale:focus-visible {
 .lyric-lines.manual-scrolling .lyric-line { filter: blur(0px); opacity: 0.8; }
 .lyric-lines.manual-scrolling .lyric-line.active { opacity: 1; }
 .lyric-message { color: #aaa4ae; font-size: 24px; font-weight: 700; }
-.settings-card {
+.settings-content { padding: 12px 34px 36px; }
+.settings-heading { color: #92929b; font-size: 13px; font-weight: 700; margin-bottom: 10px; }
+.settings-group {
   background: #202023;
   border: 1px solid #35353b;
   border-radius: 14px;
-  margin: 22px 34px;
-  padding: 26px;
+  margin-bottom: 28px;
 }
-.settings-heading { color: #f5f5f7; font-size: 18px; font-weight: 700; }
+.settings-row { min-height: 78px; padding: 14px 22px; }
+.settings-group separator { background: #35353b; margin: 0 22px; }
+.settings-label { color: #f5f5f7; font-size: 15px; font-weight: 650; }
+.settings-row .muted { color: #92929b; }
 .footer {
   background: #1d1d20;
   border-top: 1px solid #38383e;
