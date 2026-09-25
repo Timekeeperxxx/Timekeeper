@@ -1,0 +1,64 @@
+name: 发布 0.1.0 Beta 1
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-beta.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deb-appimage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.1.0-beta.1
+      - run: sudo apt-get update && sudo apt-get install -y python3.12-venv
+      - run: ./build-deb.sh
+      - name: 构建 AppImage
+        run: |
+          curl -fL --retry 3 -o /tmp/appimagetool.AppImage https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fL --retry 3 -o /tmp/runtime https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+          chmod +x /tmp/appimagetool.AppImage
+          APPIMAGETOOL=/tmp/appimagetool.AppImage APPIMAGE_RUNTIME=/tmp/runtime ./build-appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-appimage
+          path: |
+            dist/timekeeper_0.1.0~beta1_amd64.deb
+            dist/Timekeeper-0.1.0-beta.1-x86_64.AppImage
+
+  rpm:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.1.0-beta.1
+      - run: dnf install -y python3-pip rpm-build
+      - run: ./build-rpm.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+
+  release:
+    needs: [deb-appimage, rpm]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.1.0-beta.1
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 创建预发布版并上传安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.1.0-beta.1 dist/*.deb dist/*.rpm dist/*.AppImage \
+            --prerelease --title 'Timekeeper 0.1.0 Beta 1' --notes-file RELEASE_NOTES.md
