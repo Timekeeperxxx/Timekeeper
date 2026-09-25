@@ -69,4 +69,4 @@ Terminal=false
 Categories=AudioVideo;Audio;Music;Player;
 EOF
 
-dpkg-deb --build --root-owner-group "$stage" 'dist/timekeeper_0.1.0~beta1_amd64.deb'
+dpkg-deb --build --root-owner-group "$stage" 'dist/timekeeper_0.1.0.beta1_amd64.deb'

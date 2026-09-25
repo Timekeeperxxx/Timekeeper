@@ -6,11 +6,11 @@
 
 | 文件 | 目标平台 | 大小 |
 | --- | --- | ---: |
-| `timekeeper_0.1.0~beta1_amd64.deb` | Ubuntu 24.04 amd64 | 约 14 MiB |
+| `timekeeper_0.1.0.beta1_amd64.deb` | Ubuntu 24.04 amd64 | 约 14 MiB |
 | `timekeeper-0.1.0-0.beta1.fc44.x86_64.rpm` | Fedora 44 x86_64 | 约 12 MiB |
 | `Timekeeper-0.1.0-beta.1-x86_64.AppImage` | Ubuntu 24.04 amd64 及兼容环境 | 约 17 MiB |
 
-`.deb` 使用 `sudo apt install ./文件名` 安装，`.rpm` 使用 `sudo dnf install ./文件名` 安装。AppImage 先用 `chmod +x 文件名` 赋予执行权限，再直接运行。AppImage 内置应用和 Python 第三方依赖，但**仍要求宿主机安装 Python 3.12、PyGObject、GTK 4 与 GStreamer**；它不是完全自包含包。详细命令见 [README](README.md)。
+`.deb` 使用 `sudo apt install ./文件名` 安装，`.rpm` 使用 `sudo dnf install ./文件名` 安装。AppImage 先用 `chmod +x 文件名` 赋予执行权限，再直接运行。AppImage 内置应用和 Python 第三方依赖，但**仍要求宿主机安装 Python 3.12、PyGObject、GTK 4 与 GStreamer**；它不是完全自包含包。详细命令见 [README](https://github.com/Timekeeperxxx/Timekeeper#安装测试版)。
 
 ## 功能
 

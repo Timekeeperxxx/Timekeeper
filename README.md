@@ -31,14 +31,14 @@ Timekeeper 是一款面向 Linux 的非官方 QQ 音乐桌面播放器，使用 
 
 | 格式 | 适用系统 | 安装或运行 |
 | --- | --- | --- |
-| `.deb` | Ubuntu 24.04 amd64 | `sudo apt install './timekeeper_0.1.0~beta1_amd64.deb'` |
+| `.deb` | Ubuntu 24.04 amd64 | `sudo apt install ./timekeeper_0.1.0.beta1_amd64.deb` |
 | `.rpm` | Fedora 44 x86_64 | `sudo dnf install ./timekeeper-0.1.0-0.beta1.fc44.x86_64.rpm` |
 | `.AppImage` | Ubuntu 24.04 amd64 及兼容环境 | `chmod +x Timekeeper-0.1.0-beta.1-x86_64.AppImage && ./Timekeeper-0.1.0-beta.1-x86_64.AppImage` |
 
 例如，Ubuntu 用户下载 `.deb` 后执行：
 
 ```bash
-sudo apt install './timekeeper_0.1.0~beta1_amd64.deb'
+sudo apt install ./timekeeper_0.1.0.beta1_amd64.deb
 ```
 
 安装 `.deb` 或 `.rpm` 后，从应用菜单打开 **Timekeeper**，或在终端运行 `timekeeper`。包管理器会安装缺少的系统依赖。AppImage 无需安装，但这个 Beta 包仅内置应用及 Python 第三方依赖，仍需宿主机提供 **Python 3.12、PyGObject、GTK 4 和 GStreamer**；在 Ubuntu 24.04 上可先安装下方「从源码运行」列出的系统依赖。它不是跨发行版完全自包含的 AppImage。
@@ -84,7 +84,7 @@ Timekeeper 使用非官方 [QQMusicApi](https://github.com/L-1124/QQMusicApi) �
 
 ## 开发与反馈
 
-在 Ubuntu 24.04 amd64 上安装 `dpkg-dev` 后运行 `./build-deb.sh`，输出为 `dist/timekeeper_0.1.0~beta1_amd64.deb`。随后用 [appimagetool](https://github.com/AppImage/appimagetool/releases) 运行 `./build-appimage.sh` 可生成 AppImage。RPM 在 Fedora 44 x86_64 上安装 `rpm-build`、`python3-pip` 后运行 `./build-rpm.sh`。三个脚本都只打包应用和 Python 第三方依赖，GTK 与 GStreamer 由系统提供。运行现有自动测试：
+在 Ubuntu 24.04 amd64 上安装 `dpkg-dev` 后运行 `./build-deb.sh`，输出为 `dist/timekeeper_0.1.0.beta1_amd64.deb`。随后用 [appimagetool](https://github.com/AppImage/appimagetool/releases) 运行 `./build-appimage.sh` 可生成 AppImage。RPM 在 Fedora 44 x86_64 上安装 `rpm-build`、`python3-pip` 后运行 `./build-rpm.sh`。三个脚本都只打包应用和 Python 第三方依赖，GTK 与 GStreamer 由系统提供。运行现有自动测试：
 
 ```bash
 .venv/bin/python -m unittest discover -v

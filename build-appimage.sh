@@ -3,7 +3,7 @@ set -eu
 
 cd "$(dirname "$0")"
 appimagetool=${APPIMAGETOOL:-appimagetool}
-deb='dist/timekeeper_0.1.0~beta1_amd64.deb'
+deb='dist/timekeeper_0.1.0.beta1_amd64.deb'
 [ -f "$deb" ] || { echo "先运行 ./build-deb.sh" >&2; exit 1; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
