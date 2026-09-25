@@ -10,12 +10,16 @@ from unittest.mock import patch
 from qqmusic_api import Credential
 
 import music_service as music
-from app import Player
+from app import Player, lyric_scroll_target
 from gi.repository import Gst
 from lyrics_sync import Line
 
 
 class ServiceTest(unittest.TestCase):
+    def test_active_lyric_anchors_above_center(self):
+        self.assertEqual(lyric_scroll_target(250, 40, 400, 1000), 110)
+        self.assertEqual(lyric_scroll_target(160, 40, 400, 1000), 20)
+
     def test_builtin_liked_playlist_is_hidden_without_hiding_same_named_custom_list(self):
         shown = []
         player = SimpleNamespace(

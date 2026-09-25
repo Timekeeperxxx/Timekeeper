@@ -31,6 +31,13 @@ def artist(song):
     return "、".join(singer.name for singer in song.singer) or "未知歌手"
 
 
+LYRIC_ANCHOR = 0.4
+
+
+def lyric_scroll_target(row_y, row_height, viewport_height, max_scroll):
+    return max(0, min(row_y + row_height / 2 - viewport_height * LYRIC_ANCHOR, max_scroll))
+
+
 class Player(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="io.github.timekeeper.qqmusic")
@@ -58,6 +65,9 @@ class Player(Gtk.Application):
         self.lyric_rows = []
         self.lyric_state = (-1, -1, False)
         self.lyric_scroll_motion = None
+        self.lyric_geometry = None
+        self.lyric_padding = None
+        self.lyric_realign_pending = False
         self.last_manual_scroll = 0
         self.manual_scroll_timer = None
         self.cover_target_size = 240
@@ -404,6 +414,7 @@ class Player(Gtk.Application):
 
     def show_lyric_message(self, message):
         self.lyric_scroll_motion = None
+        self.lyric_realign_pending = False
         self.last_manual_scroll = 0
         self.lyric_box.remove_css_class("manual-scrolling")
         self.clear_box(self.lyric_box)
@@ -417,6 +428,9 @@ class Player(Gtk.Application):
         self.lyric_rows = []
         self.lyric_state = (-1, -1, False)
         self.lyric_scroll_motion = None
+        self.lyric_geometry = None
+        self.lyric_padding = None
+        self.lyric_realign_pending = True
         self.last_manual_scroll = 0
         self.lyric_box.remove_css_class("manual-scrolling")
         if not self.lyric_lines:
@@ -440,12 +454,8 @@ class Player(Gtk.Application):
             self.lyric_rows.append(row)
         self.lyric_bottom = Gtk.Box()
         self.lyric_box.append(self.lyric_bottom)
-        ok, position = self.audio.query_position(Gst.Format.TIME)
-        self.sync_lyrics(int(position / 1_000_000) if ok else 0, force=True)
-        if self.pages.get_visible_child_name() == "player":
-            GLib.timeout_add(50, self.recenter_lyrics)
 
-    def sync_lyrics(self, position_ms, force=False):
+    def sync_lyrics(self, position_ms, force=False, instant=False):
         if not self.lyric_lines:
             return
         line_index = bisect_right(self.lyric_starts, position_ms) - 1
@@ -459,36 +469,50 @@ class Player(Gtk.Application):
                 self.lyric_rows[old_line].remove_css_class("active")
                 self.lyric_rows[old_line].set_text(self.lyric_lines[old_line].text)
             self.lyric_state = (-1, -1, False)
-            return
-        if old_line != line_index:
-            if old_line >= 0:
-                self.lyric_rows[old_line].remove_css_class("active")
-                self.lyric_rows[old_line].set_text(self.lyric_lines[old_line].text)
-            self.lyric_rows[line_index].add_css_class("active")
-        self.lyric_state = state
-        if line.words:
-            current = line.words[word_index] if word_active else None
-            self.lyric_rows[line_index].set_markup(highlight_markup(line, position_ms, current, self.lyric_color))
+        else:
+            if old_line != line_index:
+                if old_line >= 0:
+                    self.lyric_rows[old_line].remove_css_class("active")
+                    self.lyric_rows[old_line].set_text(self.lyric_lines[old_line].text)
+                self.lyric_rows[line_index].add_css_class("active")
+            self.lyric_state = state
+            if line.words:
+                current = line.words[word_index] if word_active else None
+                self.lyric_rows[line_index].set_markup(highlight_markup(line, position_ms, current, self.lyric_color))
         if (old_line != line_index or force) and (force or not self.lyric_box.has_css_class("manual-scrolling")):
             adjustment = self.lyric_scroll.get_vadjustment()
-            if adjustment.get_page_size() > 0:
-                self.lyric_top.set_size_request(-1, max(0, int(
-                    (adjustment.get_page_size() - self.lyric_rows[0].get_height()) / 2
-                )))
-                self.lyric_bottom.set_size_request(-1, max(0, int(
-                    (adjustment.get_page_size() - self.lyric_rows[-1].get_height()) / 2
-                )))
-                _ok, location = self.lyric_rows[line_index].compute_bounds(self.lyric_box)
-                target = max(0, min(
-                    location.get_y() + location.get_height() / 2 - adjustment.get_page_size() / 2,
-                    adjustment.get_upper() - adjustment.get_page_size(),
-                ))
-                if abs(target - adjustment.get_value()) > 1:
-                    self.lyric_scroll_motion = (
-                        adjustment.get_value(), target, GLib.get_monotonic_time()
-                    )
-                else:
-                    self.lyric_scroll_motion = None
+            viewport = adjustment.get_page_size()
+            first_height = self.lyric_rows[0].get_height()
+            last_height = self.lyric_rows[-1].get_height()
+            if viewport <= 0 or first_height <= 0 or last_height <= 0:
+                return
+            padding = (
+                max(0, round(viewport * LYRIC_ANCHOR - first_height / 2)),
+                max(0, round(viewport * (1 - LYRIC_ANCHOR) - last_height / 2)),
+            )
+            if padding != self.lyric_padding:
+                self.lyric_top.set_size_request(-1, padding[0])
+                self.lyric_bottom.set_size_request(-1, padding[1])
+                self.lyric_padding = padding
+                self.lyric_realign_pending = True
+                return
+            ok, location = self.lyric_rows[max(0, line_index)].compute_bounds(self.lyric_box)
+            if not ok:
+                return
+            target = lyric_scroll_target(
+                location.get_y(), location.get_height(), viewport,
+                max(0, adjustment.get_upper() - viewport),
+            )
+            if instant:
+                adjustment.set_value(target)
+                self.lyric_scroll_motion = None
+                self.lyric_realign_pending = False
+            elif abs(target - adjustment.get_value()) > 1:
+                self.lyric_scroll_motion = (
+                    adjustment.get_value(), target, GLib.get_monotonic_time()
+                )
+            else:
+                self.lyric_scroll_motion = None
 
     def on_lyric_user_scroll(self, _controller, _dx, _dy):
         if self.lyric_lines:
@@ -530,9 +554,19 @@ class Player(Gtk.Application):
         self.update_player_layout()
         if not self.lyric_lines:
             return True
+        adjustment = self.lyric_scroll.get_vadjustment()
+        geometry = (
+            self.lyric_scroll.get_width(), adjustment.get_page_size(), adjustment.get_upper()
+        )
+        if geometry != self.lyric_geometry:
+            self.lyric_geometry = geometry
+            self.lyric_realign_pending = True
+            self.lyric_scroll_motion = None
         ok, position = self.audio.query_position(Gst.Format.TIME)
-        if ok:
-            self.sync_lyrics(int(position / 1_000_000))
+        self.sync_lyrics(
+            int(position / 1_000_000) if ok else 0,
+            force=self.lyric_realign_pending, instant=self.lyric_realign_pending,
+        )
         if self.lyric_scroll_motion:
             start, target, started = self.lyric_scroll_motion
             progress = min(1, (GLib.get_monotonic_time() - started) / 360_000)
@@ -652,7 +686,7 @@ class Player(Gtk.Application):
         self.apply_lyric_style()
         music.save_lyric_settings(self.lyric_size, self.lyric_color)
         if self.current_song and self.pages.get_visible_child_name() == "player":
-            self.recenter_lyrics()
+            self.lyric_realign_pending = True
 
     def sidebar_button(self, label, callback, icon=None):
         button = Gtk.Button()
@@ -806,8 +840,7 @@ class Player(Gtk.Application):
         if current_page != "player":
             self.player_return_page = current_page or "library"
         self.pages.set_visible_child_name("player")
-        if self.current_song:
-            GLib.timeout_add(50, self.recenter_lyrics)
+        self.lyric_realign_pending = True
 
     def toggle_player_page(self, *_):
         if self.pages.get_visible_child_name() == "player":
@@ -817,11 +850,6 @@ class Player(Gtk.Application):
 
     def close_player_page(self, *_):
         self.pages.set_visible_child_name(self.player_return_page)
-
-    def recenter_lyrics(self):
-        ok, position = self.audio.query_position(Gst.Format.TIME)
-        self.sync_lyrics(int(position / 1_000_000) if ok else 0, force=True)
-        return False
 
     def show_settings(self, *_):
         self.pages.set_visible_child_name("settings")
